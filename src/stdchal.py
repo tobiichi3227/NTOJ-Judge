@@ -117,7 +117,8 @@ class StdChal:
                     "name": "stdout",
                     "max": 64 << 20 # 64M
                 }, {
-                    "content": ""
+                    "name": "stderr",
+                    "max": 64 << 20 # 64M
                 }],
                 "cpuLimit": timelimit,
                 "memoryLimit": memlimit,
@@ -154,6 +155,7 @@ class StdChal:
 
             elif res['status'] == GoJudgeStatus.NonzeroExitStatus:
                 result['status'] = Status.RuntimeError
+                result['verdict'] = res['files']['stderr']
 
             elif res['status'] == GoJudgeStatus.Signalled:
                 result['status'] = Status.RuntimeErrorSignalled
@@ -176,7 +178,8 @@ class StdChal:
                     "name": "stdout",
                     "max": 64 << 20
                 }, {
-                    "content": ""
+                    "name": "stderr",
+                    "max": 64 << 20 # 64M
                 }],
                 "cpuLimit": timelimit,
                 "memoryLimit": memlimit,
@@ -215,6 +218,7 @@ class StdChal:
 
             elif res['status'] == GoJudgeStatus.NonzeroExitStatus:
                 result['status'] = Status.RuntimeError
+                result['verdict'] = res['files']['stderr']
 
             elif res['status'] == GoJudgeStatus.Signalled:
                 result['status'] = Status.RuntimeErrorSignalled
