@@ -66,7 +66,7 @@ def init_container(conf: Dict):
 
     return FFILIB.Init(json.dumps(conf).encode('utf-8'))
 
-async def exec(cmd: Dict) -> Dict:
+def exec(cmd: Dict) -> Dict:
     assert FFILIB is not None
     res = FFILIB.Exec(json.dumps(cmd).encode('utf-8'))
 
@@ -77,13 +77,13 @@ async def file_delete(fileid: str):
 
     FFILIB.FileDelete(fileid.encode('utf-8'))
 
-async def diff_strictly(ans: str, out: str):
+def diff_strictly(ans: str, out: str):
     assert FFILIB is not None
 
     res = FFILIB.DiffStrictly(ans.encode('utf-8'), out.encode('utf-8'))
     return res == 0
 
-async def diff_ignore_space(ans: str, out: str):
+def diff_ignore_space(ans: str, out: str):
     assert FFILIB is not None
 
     res = FFILIB.DiffIgnoreTrailiingSpace(ans.encode('utf-8'), out.encode('utf-8'))
