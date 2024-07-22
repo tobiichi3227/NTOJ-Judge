@@ -1,4 +1,6 @@
 import json
+import asyncio
+import threading
 from queue import PriorityQueue
 
 import tornado.ioloop
@@ -15,13 +17,22 @@ import config
 import executor_server
 from stdchal import StdChal
 
+class ChalObj:
+    def __init__(self, chal, callback_func):
+        self.chal = chal
+        self.callback_func = callback_func
+
+    def __lt__(self, other):
+        return self.chal['chal_id'] < other.chal['chal_id']
+
 class JudgeDispatcher:
     judge_usage = 0
     chal_running_count = 0
     chal_queue = PriorityQueue()
+    event = threading.Event()
 
     @staticmethod
-    async def start_chal(obj):
+    def start_chal(obj):
         chal_id = obj['chal_id']
         code_path = obj['code_path']
         res_path = obj['res_path']
@@ -32,7 +43,7 @@ class JudgeDispatcher:
 
         test_paramlist = []
         assert comp_type in ['gcc', 'g++', 'clang', 'clang++', 'makefile', 'python3', 'rustc', 'java']
-        assert check_type in ['diff', 'ioredir']
+        assert check_type in ['diff', 'ioredir', 'diff-strict']
 
         memlimit, timelimit = 0, 0
         for test in test_list:
@@ -52,29 +63,41 @@ class JudgeDispatcher:
             test_paramlist.append(t)
 
         chal = StdChal(chal_id, code_path, comp_type, check_type, res_path, test_paramlist, metadata)
-        JudgeDispatcher.chal_running_count -= 1
-        JudgeDispatcher.judge_usage -= obj['pri']
 
-        result = await chal.start()
+        result = chal.start()
         res = {
             'chal_id': chal_id,
             'results': result
         }
+        JudgeDispatcher.chal_running_count -= 1
         return res
 
     @staticmethod
-    async def emit_chal(obj, callback_func):
+    def running(loop):
+        while JudgeDispatcher.event.wait():
+            while not JudgeDispatcher.chal_queue.empty() and JudgeDispatcher.chal_running_count < config.JUDGE_TASK_MAXCONCURRENT:
+                pri, chal_obj = JudgeDispatcher.chal_queue.get()
+                chal, callback_func = chal_obj.chal, chal_obj.callback_func
+                JudgeDispatcher.chal_running_count += 1
+
+                def run():
+                    results = JudgeDispatcher.start_chal(chal)
+                    loop.add_callback(lambda: callback_func(results))
+
+                t = threading.Thread(target=run)
+                t.start()
+
+            if JudgeDispatcher.chal_queue.empty():
+                JudgeDispatcher.event.clear()
+
+    @staticmethod
+    def emit_chal(obj, callback_func):
         pri = obj['pri']
-        JudgeDispatcher.chal_queue.put([-pri, obj])
+        if obj is not None:
+            JudgeDispatcher.chal_queue.put((pri, ChalObj(obj, callback_func)))
 
-        while not JudgeDispatcher.chal_queue.empty() and JudgeDispatcher.judge_usage <= config.JUDGE_RESOURCE_MAXUSAGE:
-            pri, chal = JudgeDispatcher.chal_queue.get()
+        JudgeDispatcher.event.set()
 
-            JudgeDispatcher.chal_running_count += 1
-            JudgeDispatcher.judge_usage += -pri
-
-            result = await JudgeDispatcher.start_chal(chal)
-            callback_func(result)
 
 class JudgeWebSocketClient(tornado.websocket.WebSocketHandler):
     async def open(self):
@@ -83,7 +106,7 @@ class JudgeWebSocketClient(tornado.websocket.WebSocketHandler):
     async def on_message(self, msg):
         obj = json.loads(msg)
 
-        await JudgeDispatcher.emit_chal(obj, lambda res: self.write_message(json.dumps(res)))
+        JudgeDispatcher.emit_chal(obj, lambda res: self.write_message(json.dumps(res)))
 
     async def on_close(self):
         utils.logger.info('Backend disconnected')
@@ -136,7 +159,10 @@ def main():
 
     init_socket_server()
 
-    tornado.ioloop.IOLoop.current().start()
+    loop = tornado.ioloop.IOLoop.current()
+    t = threading.Thread(target=JudgeDispatcher.running, args=(loop, ))
+    t.start()
+    loop.start()
 
 if __name__ == "__main__":
     main()

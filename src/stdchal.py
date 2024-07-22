@@ -1,4 +1,4 @@
-import asyncio
+import threading
 import os
 from typing import Dict, List
 
@@ -48,25 +48,25 @@ class StdChal:
                 "verdict": "",
             })
 
-    async def start(self):
+    def start(self):
         utils.logger.info(f"StdChal {self.chal_id} started")
         if self.comp_typ in ['g++', 'clang++']:
-            res, verdict = await self.comp_cxx()
+            res, verdict = self.comp_cxx()
 
         elif self.comp_typ in ['gcc', 'clang']:
-            res, verdict = await self.comp_c()
+            res, verdict = self.comp_c()
 
         elif self.comp_typ == 'makefile':
-            res, verdict = await self.comp_make()
+            res, verdict = self.comp_make()
 
         elif self.comp_typ == 'python3':
-            res, verdict = await self.comp_python()
+            res, verdict = self.comp_python()
 
         elif self.comp_typ == 'rustc':
-            res, verdict = await self.comp_rustc()
+            res, verdict = self.comp_rustc()
 
         elif self.comp_typ == 'java':
-            t, class_name = await self.comp_java()
+            t, class_name = self.comp_java()
             res, verdict = t
 
         utils.logger.info(f"StdChal {self.chal_id} compiled")
@@ -74,38 +74,53 @@ class StdChal:
             return self.results
 
         if self.comp_typ == "python3":
-            args = ["/usr/bin/python3.11", "a"]
+            args = ["/usr/bin/python3", "a"]
         elif self.comp_typ == "java":
             args = ["/usr/bin/java", f"{class_name}"]
         else:
             args = ["a"]
 
         fileid = verdict
-        tasks = []
-        loop = asyncio.get_running_loop()
         if self.comp_typ != 'java':
             for i, test_groups in enumerate(self.test_list):
-                for tests in test_groups:
-                    tasks.append(loop.run_in_executor(None, self.judge_diff,
-                                                      args, i, fileid, tests['in'], tests['ans'], tests['timelimit'], tests['memlimit']))
-
+                t = threading.Thread(target=self.judge_diff_group, args=(i, test_groups, fileid, args))
+                t.start()
+                t.join()
         else:
             for i, test_groups in enumerate(self.test_list):
-                for tests in test_groups:
-                    tasks.append(loop.run_in_executor(None, self.judge_diff_4_java, args, class_name,
-                                                      i, fileid, tests['in'], tests['ans'], tests['timelimit'], tests['memlimit']))
+                t = threading.Thread(target=self.judge_diff_group_for_java, args=(i, class_name, test_groups, fileid, args))
+                t.start()
+                t.join()
+            pass
 
-        await asyncio.gather(*tasks)
-        await executor_server.file_delete(fileid)
+        if executor_server.file_delete(fileid) == 0:
+            utils.logger.warning(f"StdChal {self.chal_id} delete cached file {fileid} failed.")
+
+        for res in self.results:
+            if res['status'] is None:
+                res['status'] = Status.InternalError
 
         utils.logger.info(f"StdChal {self.chal_id} done")
         return self.results
+
+    def judge_diff_group(self, group_index, test_groups, fileid, run_args):
+        for tests in test_groups:
+            self.judge_diff(run_args, group_index, fileid, tests['in'], tests['ans'], tests['timelimit'], tests['memlimit'])
+            if self.results[group_index]['status'] != Status.Accepted:
+                break
+
+    def judge_diff_group_for_java(self, group_index, class_name, test_groups, fileid, run_args):
+        for tests in test_groups:
+            self.judge_diff_4_java(run_args, class_name, group_index, fileid, tests['in'], tests['ans'], tests['timelimit'], tests['memlimit'])
+            if self.results[group_index]['status'] != Status.Accepted:
+                break
 
     def judge_diff_4_java(self, args, class_name, test_groups, fileid, in_path, ans_path, timelimit, memlimit):
         # java好煩
         result = self.results[test_groups]
         if result["status"] in [Status.TimeLimitExceeded, Status.MemoryLimitExceeded, Status.RuntimeError, Status.RuntimeErrorSignalled, Status.InternalError]:
             return
+
 
         res = executor_server.exec({
             "cmd": [{
@@ -115,10 +130,10 @@ class StdChal:
                     "src": in_path
                 }, {
                     "name": "stdout",
-                    "max": 64 << 20 # 64M
+                    "max": 268435456
                 }, {
                     "name": "stderr",
-                    "max": 64 << 20 # 64M
+                    "max": 10240,
                 }],
                 "cpuLimit": timelimit,
                 "memoryLimit": memlimit,
@@ -133,75 +148,17 @@ class StdChal:
             }]
         })
         res = res["results"][0]
-        result['time'] += res['runTime']
-        result['memory'] += res['memory']
-
-        if res['status'] == GoJudgeStatus.Accepted:
-            with open(ans_path, 'r') as ans_file:
-                res_pass = executor_server.diff_ignore_space(res['files']['stdout'], ans_file.read())
-                if res_pass and result['status'] is None:
-                    result['status'] = Status.Accepted
-                elif not res_pass and result['status'] is Status.Accepted:
-                    result['status'] = Status.WrongAnswer
-        else:
-            if res['status'] == GoJudgeStatus.TimeLimitExceeded:
-                result['status'] = Status.TimeLimitExceeded
-
-            elif res['status'] == GoJudgeStatus.MemoryLimitExceeded:
-                result['status'] = Status.MemoryLimitExceeded
-
-            elif res['status'] == GoJudgeStatus.OutputLimitExceeded:
-                result['status'] = Status.OutputLimitExceeded
-
-            elif res['status'] == GoJudgeStatus.NonzeroExitStatus:
-                result['status'] = Status.RuntimeError
-                result['verdict'] = res['files']['stderr']
-
-            elif res['status'] == GoJudgeStatus.Signalled:
-                result['status'] = Status.RuntimeErrorSignalled
-
-            else:
-                result['status'] = Status.InternalError
-
-    def judge_diff(self, args, test_groups, fileid, in_path, ans_path, timelimit, memlimit):
-        result = self.results[test_groups]
-        if result["status"] in [Status.TimeLimitExceeded, Status.MemoryLimitExceeded, Status.RuntimeError, Status.RuntimeErrorSignalled, Status.InternalError]:
-            return
-
-        res = executor_server.exec({
-            "cmd": [{
-                "args": [*args],
-                "env": ["PATH=/usr/bin:/bin"],
-                "files": [{
-                    "src": in_path
-                }, {
-                    "name": "stdout",
-                    "max": 64 << 20
-                }, {
-                    "name": "stderr",
-                    "max": 64 << 20 # 64M
-                }],
-                "cpuLimit": timelimit,
-                "memoryLimit": memlimit,
-                "stackLimit": 64 << 20,
-                "procLimit": 1,
-                "strictMemoryLimit": False, # 開了會直接Signalled，會讓使用者沒辦法判斷
-                "copyIn": {
-                    "a": {
-                        "fileId": fileid
-                    }
-                },
-                "copyOut": ["stdout"]
-            }]
-        })
-        res = res["results"][0]
-        result['time'] += res['runTime']
-        result['memory'] += res['memory']
+        result['time'] = max(res['runTime'], result['time'])
+        result['memory'] = max(res['memory'], result['memory'])
 
         if res['status'] == GoJudgeStatus.Accepted:
             if result['status'] is Status.Accepted or result['status'] is None:
                 with open(ans_path, 'r') as ans_file:
-                    res_pass = executor_server.diff_ignore_space(res['files']['stdout'], ans_file.read())
+                    if self.judge_typ == "diff":
+                        res_pass = executor_server.diff_ignore_space(res['files']['stdout'], ans_file.read())
+                    elif self.judge_typ == "diff-strict":
+                        res_pass = executor_server.diff_strictly(res['files']['stdout'], ans_file.read())
+
                     if res_pass:
                         result['status'] = Status.Accepted
                     else:
@@ -222,21 +179,92 @@ class StdChal:
 
             elif res['status'] == GoJudgeStatus.Signalled:
                 result['status'] = Status.RuntimeErrorSignalled
+                result['verdict'] = res['files']['stderr']
 
             else:
                 result['status'] = Status.InternalError
 
-    async def comp_cxx(self):
-        if self.comp_typ == 'g++':
-            compiler = '/usr/bin/g++'
-            standard = '-std=gnu++17'
-        else:
-            compiler = '/usr/bin/clang++-15'
-            standard = '-std=c++17'
+    def judge_diff(self, args, test_groups, fileid, in_path, ans_path, timelimit, memlimit):
+        result = self.results[test_groups]
+        if result["status"] in [Status.TimeLimitExceeded, Status.MemoryLimitExceeded, Status.RuntimeError, Status.RuntimeErrorSignalled, Status.InternalError]:
+            return
 
         res = executor_server.exec({
             "cmd": [{
-                "args": [compiler, standard, "-O2", "a.cpp", "-o", "a"],
+                "args": [*args],
+                "env": ["PATH=/usr/bin:/bin"],
+                "files": [{
+                    "src": in_path
+                }, {
+                    "name": "stdout",
+                    "max": 268435456
+                }, {
+                    "name": "stderr",
+                    "max": 10240,
+                }],
+                "cpuLimit": timelimit,
+                "memoryLimit": memlimit,
+                "stackLimit": 65536 * 1024,
+                "procLimit": 1,
+                "strictMemoryLimit": False, # 開了會直接Signalled，會讓使用者沒辦法判斷
+                "copyIn": {
+                    "a": {
+                        "fileId": fileid
+                    }
+                },
+                "copyOut": ["stdout"]
+            }]
+        })
+        res = res["results"][0]
+        result['time'] = max(res['runTime'], result['time'])
+        result['memory'] = max(res['memory'], result['memory'])
+
+        if res['status'] == GoJudgeStatus.Accepted:
+            if result['status'] is Status.Accepted or result['status'] is None:
+                with open(ans_path, 'r') as ans_file:
+                    if self.judge_typ == "diff":
+                        res_pass = executor_server.diff_ignore_space(res['files']['stdout'], ans_file.read())
+                    elif self.judge_typ == "diff-strict":
+                        res_pass = res['files']['stdout'] == ans_file.read()
+
+                    if res_pass:
+                        result['status'] = Status.Accepted
+                    else:
+                        result['status'] = Status.WrongAnswer
+
+        else:
+            if res['status'] == GoJudgeStatus.TimeLimitExceeded:
+                result['status'] = Status.TimeLimitExceeded
+
+            elif res['status'] == GoJudgeStatus.MemoryLimitExceeded:
+                result['status'] = Status.MemoryLimitExceeded
+
+            elif res['status'] == GoJudgeStatus.OutputLimitExceeded:
+                result['status'] = Status.OutputLimitExceeded
+
+            elif res['status'] == GoJudgeStatus.NonzeroExitStatus:
+                result['verdict'] = res['files']['stderr']
+                result['status'] = Status.RuntimeError
+
+            elif res['status'] == GoJudgeStatus.Signalled:
+                result['status'] = Status.RuntimeErrorSignalled
+
+            else:
+                result['status'] = Status.InternalError
+
+    def comp_cxx(self):
+        if self.comp_typ == 'g++':
+            compiler = '/usr/bin/g++'
+            standard = '-std=gnu++17'
+            options = ['-O2']
+        else:
+            compiler = '/usr/bin/clang++'
+            standard = '-std=c++17'
+            options = ['-O2']
+
+        res = executor_server.exec({
+            "cmd": [{
+                "args": [compiler, standard, *options, "-static", "a.cpp", "-o", "a"],
                 "env": ["PATH=/usr/bin:/bin"],
                 "files": [{
                     "content": ""
@@ -244,7 +272,7 @@ class StdChal:
                     "content": ""
                 }, {
                     "name": "stderr",
-                    "max": 10240
+                    "max": 102400
                 }],
                 "cpuLimit": 10000000000, # 10 sec
                 "memoryLimit": 536870912, # 512M (256 << 20)
@@ -261,22 +289,17 @@ class StdChal:
         res = res["results"][0]
         return self.compile_update_result(res, "a")
 
-    async def comp_c(self):
+    def comp_c(self):
         if self.comp_typ == 'gcc':
             compiler = '/usr/bin/gcc'
             standard = "-std=gnu11"
         else:
-            compiler = '/usr/bin/clang-15'
+            compiler = '/usr/bin/clang'
             standard = '-std=c11'
-
-        # elif self.comp_typ == 'clang':
-        #     compiler = '/usr/bin/clang'
-        # else:
-        #     compiler = '/usr/bin/tobiichi-c-compiler'
 
         res = executor_server.exec({
             "cmd": [{
-                "args": [compiler, standard, "-O2", "a.c", "-o", "a", "-lm"],
+                "args": [compiler, standard, "-O2", "-static", "a.c", "-o", "a", "-lm"],
                 "env": ["PATH=/usr/bin:/bin"],
                 "files": [{
                     "content": ""
@@ -284,7 +307,7 @@ class StdChal:
                     "content": ""
                 }, {
                     "name": "stderr",
-                    "max": 10240
+                    "max": 102400
                 }],
                 "cpuLimit": 10000000000,
                 "memoryLimit": 536870912,
@@ -301,7 +324,7 @@ class StdChal:
         res = res["results"][0]
         return self.compile_update_result(res, "a")
 
-    async def comp_rustc(self):
+    def comp_rustc(self):
         res = executor_server.exec({
             "cmd": [{
                 "args": ["/usr/bin/rustc", "./a.rs", "-O", "-o", "a"],
@@ -329,10 +352,10 @@ class StdChal:
         res = res["results"][0]
         return self.compile_update_result(res, "a")
 
-    async def comp_python(self):
+    def comp_python(self):
         res = executor_server.exec({
             "cmd": [{
-                "args": ["/usr/bin/python3.11", "-m", "py_compile", "./a.py"],
+                "args": ["/usr/bin/python3", "-m", "py_compile", "./a.py"],
                 "env": ["PATH=/usr/bin:/bin"],
                 "files": [{
                     "content": ""
@@ -357,7 +380,7 @@ class StdChal:
         res = res["results"][0]
         return self.compile_update_result(res, "__pycache__/a.cpython-311.pyc")
 
-    async def comp_java(self):
+    def comp_java(self):
         with open(self.code_path, 'r') as java_file:
             main_class_name = utils.get_java_main_class(java_file.read())
             if main_class_name == "":
@@ -365,7 +388,7 @@ class StdChal:
                     result["verdict"] = "Your main class not found or invalid class name or more than one main function."
                     result["status"] = Status.CompileError
 
-                return GoJudgeStatus.NonzeroExitStatus, None
+                return (GoJudgeStatus.NonzeroExitStatus, None), ""
 
         res = executor_server.exec({
             "cmd": [{
@@ -400,7 +423,7 @@ class StdChal:
 
         return (self.compile_update_result(res, f"{main_class_name}.class"), main_class_name)
 
-    async def comp_make(self):
+    def comp_make(self):
         # 23 38 59 75 76 81 85 164 187 233 239 300 302 545 659
 
         res_make_path = f"{self.res_path}/make"

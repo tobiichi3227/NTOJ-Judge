@@ -59,7 +59,7 @@ def init():
     ''')
 
     FFI.cdef('''
-    void free(void* ptr);
+    void free(void *ptr);
     ''')
 
     FFILIB = FFI.dlopen('./executor_server_lib_without_seccomp.so')
@@ -69,7 +69,7 @@ def init_container(conf: dict):
 
     return FFILIB.Init(json.dumps(conf).encode('utf-8'))
 
-def exec(cmd: Dict) -> dict:
+def exec(cmd: dict) -> dict:
     assert FFILIB is not None
     char_pointer = FFILIB.Exec(json.dumps(cmd).encode('utf-8'))
     res = json.loads(FFI.string(char_pointer).decode('utf-8'))
@@ -77,10 +77,13 @@ def exec(cmd: Dict) -> dict:
 
     return res
 
-async def file_delete(fileid: str):
+def file_delete(fileid: str):
     assert FFILIB is not None
 
-    FFILIB.FileDelete(fileid.encode('utf-8'))
+    return FFILIB.FileDelete(fileid.encode('utf-8'))
+
+def file_list():
+    pass
 
 def diff_strictly(ans: str, out: str):
     assert FFILIB is not None
@@ -93,3 +96,7 @@ def diff_ignore_space(ans: str, out: str):
 
     res = FFILIB.DiffIgnoreTrailiingSpace(ans.encode('utf-8'), out.encode('utf-8'))
     return res == 0
+
+def free(ptr):
+    assert FFILIB is not None
+
