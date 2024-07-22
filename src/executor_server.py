@@ -1,6 +1,5 @@
 import cffi
 import json
-from typing import Dict
 
 FFI = None
 FFILIB = None
@@ -59,18 +58,24 @@ def init():
     int DiffIgnoreTrailiingSpace(char* e1, char* e2);
     ''')
 
+    FFI.cdef('''
+    void free(void* ptr);
+    ''')
+
     FFILIB = FFI.dlopen('./executor_server_lib_without_seccomp.so')
 
-def init_container(conf: Dict):
+def init_container(conf: dict):
     assert FFILIB is not None
 
     return FFILIB.Init(json.dumps(conf).encode('utf-8'))
 
-def exec(cmd: Dict) -> Dict:
+def exec(cmd: Dict) -> dict:
     assert FFILIB is not None
-    res = FFILIB.Exec(json.dumps(cmd).encode('utf-8'))
+    char_pointer = FFILIB.Exec(json.dumps(cmd).encode('utf-8'))
+    res = json.loads(FFI.string(char_pointer).decode('utf-8'))
+    FFILIB.free(char_pointer)
 
-    return json.loads(FFI.string(res).decode('utf-8'))
+    return res
 
 async def file_delete(fileid: str):
     assert FFILIB is not None
