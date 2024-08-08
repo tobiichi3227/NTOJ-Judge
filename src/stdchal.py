@@ -76,6 +76,22 @@ class StdChal:
             t, class_name = self.comp_java()
             res, verdict = t
 
+        checker_fileid = None
+        if self.judge_typ == 'ioredir':
+            checker_res, checker_fileid = self.comp_checker()
+            if checker_res != GoJudgeStatus.Accepted:
+                for res in self.results:
+                    res['status'] = Status.InternalError
+
+                utils.logger.warning(f"StdChal {self.chal_id} checker compile failed")
+                if checker_fileid and executor_server.file_delete(checker_fileid) == 0:
+                    utils.logger.warning(f"StdChal {self.chal_id} delete cached checker file {fileid} failed.")
+
+                if executor_server.file_delete(fileid) == 0:
+                    utils.logger.warning(f"StdChal {self.chal_id} delete cached file {fileid} failed.")
+
+                return self.results
+
         utils.logger.info(f"StdChal {self.chal_id} compiled")
         if res != GoJudgeStatus.Accepted:
             return self.results
@@ -90,7 +106,7 @@ class StdChal:
         fileid = verdict
         if self.comp_typ != 'java':
             for i, test_groups in enumerate(self.test_list):
-                t = threading.Thread(target=self.judge_diff_group, args=(i, test_groups, fileid, args))
+                t = threading.Thread(target=self.judge_diff_group, args=(i, test_groups, fileid, checker_fileid, args))
                 t.start()
                 t.join()
         else:
@@ -98,7 +114,9 @@ class StdChal:
                 t = threading.Thread(target=self.judge_diff_group_for_java, args=(i, class_name, test_groups, fileid, args))
                 t.start()
                 t.join()
-            pass
+
+        if checker_fileid and executor_server.file_delete(checker_fileid) == 0:
+            utils.logger.warning(f"StdChal {self.chal_id} delete cached checker file {fileid} failed.")
 
         if executor_server.file_delete(fileid) == 0:
             utils.logger.warning(f"StdChal {self.chal_id} delete cached file {fileid} failed.")
@@ -114,11 +132,17 @@ class StdChal:
         utils.logger.info(f"StdChal {self.chal_id} done")
         return self.results
 
-    def judge_diff_group(self, group_index, test_groups, fileid, run_args):
-        for tests in test_groups:
-            self.judge_diff(run_args, group_index, fileid, tests['in'], tests['ans'], tests['timelimit'], tests['memlimit'])
-            if self.results[group_index]['status'] != Status.Accepted:
-                break
+    def judge_diff_group(self, group_index, test_groups, fileid, checker_fileid, run_args):
+        if self.judge_typ != 'ioredir' and checker_fileid is None:
+            for tests in test_groups:
+                self.judge_diff(run_args, group_index, fileid, tests['in'], tests['ans'], tests['timelimit'], tests['memlimit'])
+                if self.results[group_index]['status'] != Status.Accepted:
+                    break
+        else:
+            for tests in test_groups:
+                self.judge_diff_checker(run_args, group_index, fileid, checker_fileid, tests['in'], tests['ans'], tests['timelimit'], tests['memlimit'])
+                if self.results[group_index]['status'] != Status.Accepted:
+                    break
 
     def judge_diff_group_for_java(self, group_index, class_name, test_groups, fileid, run_args):
         for tests in test_groups:
@@ -264,6 +288,175 @@ class StdChal:
 
             else:
                 result['status'] = Status.InternalError
+
+    def judge_diff_checker(self, args, test_groups, fileid, checker_fileid, in_path, ans_path, timelimit, memlimit):
+        result = self.results[test_groups]
+        if result["status"] in [Status.TimeLimitExceeded, Status.MemoryLimitExceeded, Status.RuntimeError, Status.RuntimeErrorSignalled, Status.InternalError]:
+            return
+
+        test_files = {
+            0: None,
+            1: None,
+            2: None,
+        }
+        checker_files = {
+            0: None,
+            1: None,
+            2: None,
+        }
+        pipe_mappings = []
+
+        test_files[self.metadata["redir_test"]["testin"]] = {
+            "src": in_path
+        }
+
+        test_files[self.metadata["redir_test"]["testout"]] = None
+        test_files[self.metadata["redir_test"]["pipein"]] = None
+        test_files[self.metadata["redir_test"]["pipeout"]] = None
+        test_files[2] = {
+            "name": "stderr",
+            "max": 10240,
+        }
+        try:
+            test_files.pop(-1)
+        except KeyError:
+            pass
+
+        checker_files[self.metadata["redir_check"]["ansin"]] = {
+            "src": ans_path
+        }
+        checker_files[self.metadata["redir_check"]["testin"]] = {
+            "src": in_path
+        }
+        checker_files[1] = {
+            'name': 'stdout',
+            'max': 10240,
+        }
+        checker_files[self.metadata["redir_check"]["pipein"]] = None
+        checker_files[self.metadata["redir_check"]["pipeout"]] = None
+        try:
+            checker_files.pop(-1)
+        except KeyError:
+            pass
+
+        pipe_mappings.append({
+            "in": {"index": 0, "fd": self.metadata["redir_test"]["pipeout"]},
+            "out": {"index": 1, "fd": self.metadata["redir_check"]["pipeout"]},
+            "proxy": True,
+        })
+
+        if self.metadata["redir_test"]["pipein"] != -1 and self.metadata["redir_check"]["pipein"] != -1:
+            pipe_mappings.append({
+                "in": {"index": 1, "fd": self.metadata["redir_check"]["pipein"]},
+                "out": {"index": 0, "fd": self.metadata["redir_test"]["pipein"]},
+            })
+
+        res = executor_server.exec({
+            "cmd": [{
+                "args": [*args],
+                "env": ["PATH=/usr/bin:/bin"],
+                "files": list(test_files.values()),
+                "cpuLimit": timelimit,
+                "memoryLimit": memlimit,
+                "stackLimit": 65536 * 1024,
+                "procLimit": 1,
+                "cpuRateLimit": 1000,
+                "strictMemoryLimit": False, # 開了會直接Signalled，會讓使用者沒辦法判斷
+                "copyIn": {
+                    "a": {
+                        "fileId": fileid
+                    }
+                },
+            },
+            {
+                "args": ['check'],
+                "env": ["PATH=/usr/bin:/bin"],
+                "files": list(checker_files.values()),
+                "cpuLimit": timelimit, # 5 sec
+                "memoryLimit": 536870912, # 512M (256 << 20)
+                "procLimit": 10,
+                "strictMemoryLimit": False, # 開了會直接Signalled，會讓使用者沒辦法判斷
+                "copyIn": {
+                    "check": {
+                        "fileId": checker_fileid
+                    }
+                },
+            }],
+            "pipeMapping": pipe_mappings,
+        })
+        checker_res = res["results"][1]
+        res = res["results"][0]
+        result['time'] = max(res['runTime'], result['time'])
+        result['memory'] = max(res['memory'], result['memory'])
+
+        # SIGPIPE -> checker failed
+        if res['status'] == GoJudgeStatus.Signalled and res['exitStatus'] == 13: # SIGPIPE
+            result['status'] = Status.InternalError
+            return
+
+        if res['status'] == GoJudgeStatus.Accepted:
+            if checker_res['status'] == GoJudgeStatus.Accepted:
+                result['status'] = Status.Accepted
+            elif checker_res['status'] == GoJudgeStatus.NonzeroExitStatus:
+                result['status'] = Status.WrongAnswer
+            else:
+                result['status'] = Status.InternalError
+                # checker failed
+
+        else:
+            if res['status'] == GoJudgeStatus.TimeLimitExceeded:
+                result['status'] = Status.TimeLimitExceeded
+
+            elif res['status'] == GoJudgeStatus.MemoryLimitExceeded:
+                result['status'] = Status.MemoryLimitExceeded
+
+            elif res['status'] == GoJudgeStatus.OutputLimitExceeded:
+                result['status'] = Status.OutputLimitExceeded
+
+            elif res['status'] == GoJudgeStatus.NonzeroExitStatus:
+                result['verdict'] = res['files']['stderr']
+                result['status'] = Status.RuntimeError
+
+            elif res['status'] == GoJudgeStatus.Signalled:
+                result['status'] = Status.RuntimeErrorSignalled
+
+            else:
+                result['status'] = Status.InternalError
+
+    def comp_checker(self):
+        res_checker_path = f"{self.res_path}/check"
+        copy_in: dict[str, dict[str, str]] = {}
+        for file in os.listdir(res_checker_path):
+            if os.path.isfile(os.path.join(res_checker_path, file)):
+                copy_in[file] = {
+                    "src": os.path.join(res_checker_path, file)
+                }
+
+        res = executor_server.exec({
+            "cmd": [{
+                "args": ["/usr/bin/sh", "build"],
+                "env": ["PATH=/usr/bin:/bin"],
+                "files": [{
+                    "content": ""
+                }, {
+                    "name": "stdout",
+                    "max": 10240
+                }, {
+                    "name": "stderr",
+                    "max": 10240
+                }],
+                "cpuLimit": 10000000000,
+                "memoryLimit": 2147483647,
+                "procLimit": 10,
+                "copyIn": {
+                    **copy_in
+                },
+                "copyOut": ["stderr"],
+                "copyOutCached": ["check"]
+            }]
+        })
+        res = res["results"][0]
+        return self.compile_update_result(res, "check")
 
     def comp_cxx(self):
         if self.comp_typ == 'g++':
