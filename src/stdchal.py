@@ -216,6 +216,7 @@ class StdChal:
                 "memoryLimit": memlimit,
                 "stackLimit": 65536 * 1024,
                 "procLimit": 1,
+                "cpuRateLimit": 1000,
                 "strictMemoryLimit": False, # 開了會直接Signalled，會讓使用者沒辦法判斷
                 "copyIn": {
                     "a": {
