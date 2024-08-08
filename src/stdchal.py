@@ -28,6 +28,13 @@ class Status:
     RuntimeErrorSignalled = 9 # 請不要把OJ當CTF打
     CompileLimitExceeded = 10 # 沒事不要炸Judge
 
+SignalErrorMessage = {
+    4: 'illegal hardware instruction',
+    6: 'abort',
+    8: 'floating point exception',
+    11: 'segmentation fault'
+}
+
 class StdChal:
     def __init__(self, chal_id: int, code_path: str, comp_typ: str, judge_typ: str, res_path: str, test_list: List, metadata: Dict) -> None:
         self.code_path = code_path
@@ -96,9 +103,13 @@ class StdChal:
         if executor_server.file_delete(fileid) == 0:
             utils.logger.warning(f"StdChal {self.chal_id} delete cached file {fileid} failed.")
 
+        v = '\n'.join(f"Task {idx + 1}: {res['verdict']}" for idx, res in enumerate(self.results) if res['verdict'] != "")
+
         for res in self.results:
             if res['status'] is None:
                 res['status'] = Status.InternalError
+
+            res['verdict'] = v
 
         utils.logger.info(f"StdChal {self.chal_id} done")
         return self.results
@@ -179,7 +190,6 @@ class StdChal:
 
             elif res['status'] == GoJudgeStatus.Signalled:
                 result['status'] = Status.RuntimeErrorSignalled
-                result['verdict'] = res['files']['stderr']
 
             else:
                 result['status'] = Status.InternalError
@@ -248,6 +258,8 @@ class StdChal:
 
             elif res['status'] == GoJudgeStatus.Signalled:
                 result['status'] = Status.RuntimeErrorSignalled
+                if res['exitStatus'] in SignalErrorMessage:
+                    result['verdict'] = SignalErrorMessage[res['exitStatus']]
 
             else:
                 result['status'] = Status.InternalError
