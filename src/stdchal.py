@@ -367,7 +367,7 @@ class StdChal:
     def comp_python(self):
         res = executor_server.exec({
             "cmd": [{
-                "args": ["/usr/bin/python3", "-m", "py_compile", "./a.py"],
+                "args": ["/usr/bin/python3", "-c", '''import py_compile; py_compile.compile('a.py', 'a.pyc', doraise=True, optimize=2)'''],
                 "env": ["PATH=/usr/bin:/bin"],
                 "files": [{
                     "content": ""
@@ -386,11 +386,11 @@ class StdChal:
                     }
                 },
                 "copyOut": ["stderr"],
-                "copyOutCached": ["__pycache__/a.cpython-311.pyc"]
+                "copyOutCached": ["a.pyc"],
             }]
         })
         res = res["results"][0]
-        return self.compile_update_result(res, "__pycache__/a.cpython-311.pyc")
+        return self.compile_update_result(res, "a.pyc")
 
     def comp_java(self):
         with open(self.code_path, 'r') as java_file:
