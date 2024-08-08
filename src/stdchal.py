@@ -295,7 +295,8 @@ class StdChal:
                     }
                 },
                 "copyOut": ["stderr"],
-                "copyOutCached": ["a"]
+                "copyOutCached": ["a"],
+                "copyOutMax": 64000000
             }]
         })
         res = res["results"][0]
@@ -330,7 +331,8 @@ class StdChal:
                     }
                 },
                 "copyOut": ["stderr"],
-                "copyOutCached": ["a"]
+                "copyOutCached": ["a"],
+                "copyOutMax": 64000000
             }]
         })
         res = res["results"][0]
@@ -358,7 +360,8 @@ class StdChal:
                     }
                 },
                 "copyOut": ["stderr"],
-                "copyOutCached": ["a"]
+                "copyOutCached": ["a"],
+                "copyOutMax": 64000000
             }]
         })
         res = res["results"][0]
@@ -387,6 +390,7 @@ class StdChal:
                 },
                 "copyOut": ["stderr"],
                 "copyOutCached": ["a.pyc"],
+                "copyOutMax": 64000000
             }]
         })
         res = res["results"][0]
@@ -424,7 +428,8 @@ class StdChal:
                     }
                 },
                 "copyOut": ["stdout"],
-                "copyOutCached": [f"{main_class_name}.class"]
+                "copyOutCached": [f"{main_class_name}.class"],
+                "copyOutMax": 64000000
             }]
         })
         res = res["results"][0]
@@ -469,7 +474,8 @@ class StdChal:
                     **copy_in
                 },
                 "copyOut": ["stderr"],
-                "copyOutCached": ["a"]
+                "copyOutCached": ["a"],
+                "copyOutMax": 64000000
             }]
         })
         res = res["results"][0]
