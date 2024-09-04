@@ -1,7 +1,7 @@
 import json
 import asyncio
 import threading
-from queue import PriorityQueue
+from queue import Queue
 
 import tornado.ioloop
 import tornado.netutil
@@ -22,13 +22,17 @@ class ChalObj:
         self.chal = chal
         self.callback_func = callback_func
 
-    def __lt__(self, other):
-        return self.chal['chal_id'] < other.chal['chal_id']
+class ChalPriority:
+    NORMAL = 0
+    CONTEST = 1
+    CONTEST_REJUDGE = 2
+    NORMAL_REJUDGE = 3
 
 class JudgeDispatcher:
     judge_usage = 0
     chal_running_count = 0
-    chal_queue = PriorityQueue()
+    chal_queues = [Queue() for i in range(4)]
+    chal_set = set()
     event = threading.Event()
 
     @staticmethod
@@ -70,79 +74,74 @@ class JudgeDispatcher:
             'results': result
         }
         JudgeDispatcher.chal_running_count -= 1
+        JudgeDispatcher.chal_set.remove(chal_id)
         return res
 
     @staticmethod
     def running(loop):
         while JudgeDispatcher.event.wait():
-            while not JudgeDispatcher.chal_queue.empty() and JudgeDispatcher.chal_running_count < config.JUDGE_TASK_MAXCONCURRENT:
-                pri, chal_obj = JudgeDispatcher.chal_queue.get()
-                chal, callback_func = chal_obj.chal, chal_obj.callback_func
-                JudgeDispatcher.chal_running_count += 1
+            all_clear = True
+            for idx, queue in enumerate(JudgeDispatcher.chal_queues):
+                if queue.empty():
+                    continue
 
-                def run():
-                    results = JudgeDispatcher.start_chal(chal)
-                    loop.add_callback(lambda: callback_func(results))
+                all_clear = False
 
-                t = threading.Thread(target=run)
-                t.start()
+                max_cnt = config.JUDGE_TASK_MAXCONCURRENT
+                if idx == ChalPriority.CONTEST_REJUDGE or idx == ChalPriority.NORMAL_REJUDGE:
+                    max_cnt -= 1
 
-            if JudgeDispatcher.chal_queue.empty():
+                while not queue.empty() and JudgeDispatcher.chal_running_count < max_cnt:
+                    chal_obj = queue.get()
+                    chal, callback_func = chal_obj.chal, chal_obj.callback_func
+                    JudgeDispatcher.chal_running_count += 1
+
+                    def run():
+                        results = JudgeDispatcher.start_chal(chal)
+                        loop.add_callback(lambda: callback_func(results))
+
+                    t = threading.Thread(target=run)
+                    t.start()
+
+            if all_clear:
                 JudgeDispatcher.event.clear()
 
     @staticmethod
     def emit_chal(obj, callback_func):
         pri = obj['pri']
-        if obj is not None:
-            JudgeDispatcher.chal_queue.put((pri, ChalObj(obj, callback_func)))
+        assert ChalPriority.NORMAL <= pri <= ChalPriority.NORMAL_REJUDGE
+        if obj is not None and obj['chal_id'] not in JudgeDispatcher.chal_set:
+            JudgeDispatcher.chal_set.add(obj['chal_id'])
+            JudgeDispatcher.chal_queues[pri].put(ChalObj(obj, callback_func))
 
         JudgeDispatcher.event.set()
 
 
 class JudgeWebSocketClient(tornado.websocket.WebSocketHandler):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.settings['websocket_ping_interval'] = 5
+
     async def open(self):
         utils.logger.info('Backend connected')
 
     async def on_message(self, msg):
         obj = json.loads(msg)
+        self.ping()
 
         JudgeDispatcher.emit_chal(obj, lambda res: self.write_message(json.dumps(res)))
 
-    async def on_close(self):
-        utils.logger.info('Backend disconnected')
+    def on_close(self):
+        print(self.close_code, self.close_reason)
+        utils.logger.info(f'Backend disconnected close_code: {self.close_code} close_reason: {self.close_reason}')
 
     def check_origin(self, _: str) -> bool:
         return True
-
-class MonitorWebSocketClient(tornado.websocket.WebSocketHandler):
-    """
-    Monitor
-    """
-    async def open(self):
-        pass
-
-    async def on_message(self, msg):
-        pass
-
-    async def on_close(self):
-        pass
-
-    def check_origin(self, _: str) -> bool:
-        return True
-
-class InfoRequestHandler(tornado.web.RequestHandler):
-    """
-    放一些info的地方，如Setting Version
-    """
-
-    async def get(self):
-        pass
 
 def init_socket_server():
     app = tornado.web.Application([
         (r"/judge", JudgeWebSocketClient),
-        (r"/monitor", MonitorWebSocketClient),
-        (r"/info", InfoRequestHandler),
     ])
     app.listen(2502)
 

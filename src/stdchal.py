@@ -77,6 +77,7 @@ class StdChal:
             res, verdict = t
 
         checker_fileid = None
+        fileid = verdict
         if self.judge_typ == 'ioredir':
             checker_res, checker_fileid = self.comp_checker()
             if checker_res != GoJudgeStatus.Accepted:
@@ -103,7 +104,6 @@ class StdChal:
         else:
             args = ["a"]
 
-        fileid = verdict
         if self.comp_typ != 'java':
             for i, test_groups in enumerate(self.test_list):
                 t = threading.Thread(target=self.judge_diff_group, args=(i, test_groups, fileid, checker_fileid, args))
@@ -470,7 +470,7 @@ class StdChal:
 
         res = executor_server.exec({
             "cmd": [{
-                "args": [compiler, standard, *options, "-static", "a.cpp", "-o", "a"],
+                "args": [compiler, standard, *options, "-pipe", "-static", "a.cpp", "-o", "a"],
                 "env": ["PATH=/usr/bin:/bin"],
                 "files": [{
                     "content": ""
@@ -506,7 +506,7 @@ class StdChal:
 
         res = executor_server.exec({
             "cmd": [{
-                "args": [compiler, standard, "-O2", "-static", "a.c", "-o", "a", "-lm"],
+                "args": [compiler, standard, "-O2", "-pipe", "-static", "a.c", "-o", "a", "-lm"],
                 "env": ["PATH=/usr/bin:/bin"],
                 "files": [{
                     "content": ""
@@ -603,7 +603,7 @@ class StdChal:
         res = executor_server.exec({
             "cmd": [{
                 "args": ["/usr/bin/javac", f"{main_class_name}.java"],
-                "env": ["PATH=/usr/bin:/bin", "JAVA_HOME=/lib/jvm/default-java"],
+                "env": ["PATH=/usr/bin:/bin", "JAVA_HOME=/lib/jvm/java-17-openjdk-amd64"],
                 "files": [{
                     "content": ""
                 }, {
