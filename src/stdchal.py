@@ -448,12 +448,21 @@ class StdChal:
         test_files = {
             0: None,
             1: None,
-            2: None,
+            2: {
+                "name": "stderr",
+                "max": 10240,
+            },
         }
         checker_files = {
             0: None,
-            1: None,
-            2: None,
+            1: {
+                "name": "stdout",
+                "max": 10240,
+            },
+            2: {
+                "name": "stderr",
+                "max": 10240,
+            },
         }
         pipe_mappings = []
 
@@ -464,10 +473,6 @@ class StdChal:
         test_files[self.metadata["redir_test"]["testout"]] = None
         test_files[self.metadata["redir_test"]["pipein"]] = None
         test_files[self.metadata["redir_test"]["pipeout"]] = None
-        test_files[2] = {
-            "name": "stderr",
-            "max": 10240,
-        }
         try:
             test_files.pop(-1)
         except KeyError:
@@ -478,10 +483,6 @@ class StdChal:
         }
         checker_files[self.metadata["redir_check"]["testin"]] = {
             "src": in_path
-        }
-        checker_files[1] = {
-            'name': 'stdout',
-            'max': 10240,
         }
         checker_files[self.metadata["redir_check"]["pipein"]] = None
         checker_files[self.metadata["redir_check"]["pipeout"]] = None
