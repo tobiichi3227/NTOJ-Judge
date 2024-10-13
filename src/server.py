@@ -1,21 +1,22 @@
+import decimal
 import json
-import asyncio
 import threading
 from queue import Queue
 
-import tornado.ioloop
-import tornado.netutil
-import tornado.process
 import tornado.httpserver
-import tornado.web
+import tornado.ioloop
 import tornado.log
+import tornado.netutil
 import tornado.options
+import tornado.process
+import tornado.web
 import tornado.websocket
 
-import utils
 import config
 import executor_server
+import utils
 from stdchal import StdChal
+
 
 class ChalObj:
     def __init__(self, chal, callback_func):
@@ -116,6 +117,11 @@ class JudgeDispatcher:
 
         JudgeDispatcher.event.set()
 
+class Encoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, decimal.Decimal):
+            return str(o)
+        return super().default(o)
 
 class JudgeWebSocketClient(tornado.websocket.WebSocketHandler):
 
@@ -130,7 +136,7 @@ class JudgeWebSocketClient(tornado.websocket.WebSocketHandler):
         obj = json.loads(msg)
         self.ping()
 
-        JudgeDispatcher.emit_chal(obj, lambda res: self.write_message(json.dumps(res)))
+        JudgeDispatcher.emit_chal(obj, lambda res: self.write_message(json.dumps(res, cls=Encoder)))
 
     def on_close(self):
         print(self.close_code, self.close_reason)

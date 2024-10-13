@@ -1,5 +1,6 @@
-import threading
 import os
+import decimal
+import threading
 from typing import Dict, List
 
 import executor_server
@@ -82,6 +83,8 @@ class StdChal:
                 "time": 0,
                 "memory": 0,
                 "verdict": "",
+                "score": decimal.Decimal('Inf'),
+                "score_type": "NONE",
             })
 
     def start(self):
@@ -115,7 +118,7 @@ class StdChal:
             checker_res, checker_fileid = self.comp_checker()
             if checker_res != GoJudgeStatus.Accepted:
                 for res in self.results:
-                    res['status'] = Status.InternalError
+                    res['status'] = Status.SpecialJudgeError
 
                 utils.logger.warning(f"StdChal {self.chal_id} checker compile failed")
                 if checker_fileid and executor_server.file_delete(checker_fileid) == 0:
@@ -174,6 +177,7 @@ class StdChal:
 
         elif self.judge_typ == 'cms' and checker_fileid is not None:
             for tests in test_groups:
+
                 self.judge_diff_cms(run_args, group_index, fileid, checker_fileid, tests['in'], tests['ans'], tests['timelimit'], tests['memlimit'])
                 if self.results[group_index]['status'] != Status.Accepted:
                     break
@@ -415,6 +419,31 @@ class StdChal:
             else:
                 result['status'] = Status.SpecialJudgeError
 
+            checker_stdout = checker_res['files']['stdout']
+            if checker_stdout:
+                try:
+                    score_type, score, status = checker_stdout.strip().split(";")
+                    if score_type in ["NONE", "CMS", "CF"]:
+                        result['score_type'] = score_type
+                    else:
+                        result['score_type'] = "NONE"
+
+                    if score != "":
+                        score = decimal.Decimal(score)
+                        if score_type == "CMS":
+                            if score > 1.0:
+                                score = decimal.Decimal('1.0')
+                            if score < 0.0:
+                                score = decimal.Decimal('0.0')
+
+                        if score_type != "NONE":
+                            result['score'] = min(score, result['score'])
+
+                    if status in Status.STRMAP:
+                        result['status'] = Status.STRMAP[status]
+
+                except ValueError:
+                    result['status'] = Status.SpecialJudgeError
 
         else:
             if res['status'] == GoJudgeStatus.TimeLimitExceeded:
@@ -554,6 +583,12 @@ class StdChal:
             else:
                 result['status'] = Status.SpecialJudgeError
                 # checker failed
+
+            if 'stderr' in checker_res['files']:
+                result['verdict'] = checker_res['files']['stderr']
+
+            elif 'stdout' in checker_res['files']:
+                result['verdict'] = checker_res['files']['stdout']
 
         else:
             if res['status'] == GoJudgeStatus.TimeLimitExceeded:
