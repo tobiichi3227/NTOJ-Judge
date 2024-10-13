@@ -47,7 +47,7 @@ class JudgeDispatcher:
 
         test_paramlist = []
         assert comp_type in ['gcc', 'g++', 'clang', 'clang++', 'makefile', 'python3', 'rustc', 'java']
-        assert check_type in ['diff', 'ioredir', 'diff-strict']
+        assert check_type in ['diff', 'ioredir', 'diff-strict', 'cms']
 
         memlimit, timelimit = 0, 0
         for test in test_list:

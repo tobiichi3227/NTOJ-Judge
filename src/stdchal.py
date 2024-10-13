@@ -18,15 +18,44 @@ class GoJudgeStatus:
 
 class Status:
     Accepted = 1
-    WrongAnswer = 2
-    RuntimeError = 3 # Re:從零開始的競賽生活
-    TimeLimitExceeded = 4
-    MemoryLimitExceeded = 5
-    CompileError = 6 # 再不編譯啊
-    InternalError = 7
+    PartialCorrect = 2
+    WrongAnswer = 3
+    RuntimeError = 4 # Re:從零開始的競賽生活
+    RuntimeErrorSignalled = 5 # 請不要把OJ當CTF打
+    TimeLimitExceeded = 6
+    MemoryLimitExceeded = 7
     OutputLimitExceeded = 8
-    RuntimeErrorSignalled = 9 # 請不要把OJ當CTF打
+    CompileError = 9 # 再不編譯啊
     CompileLimitExceeded = 10 # 沒事不要炸Judge
+    InternalError = 11
+    SpecialJudgeError = 12
+    """
+    Accepted = 1
+    PartialCorrect = 2
+    WrongAnswer = 3
+    RuntimeError = 4 # Re:從零開始的競賽生活
+    RuntimeErrorSignalled = 10 # 請不要把OJ當CTF打
+    TimeLimitExceeded = 5
+    MemoryLimitExceeded = 6
+    CompileError = 7 # 再不編譯啊
+    OutputLimitExceeded = 9
+    CompileLimitExceeded = 11 # 沒事不要炸Judge
+    InternalError = 8
+    """
+    STRMAP = {
+        "AC": Accepted,
+        "PC": PartialCorrect,
+        "WA": WrongAnswer,
+        "RE": RuntimeError,
+        "RESIG": RuntimeErrorSignalled,
+        "TLE": TimeLimitExceeded,
+        "MLE": MemoryLimitExceeded,
+        "OLE": OutputLimitExceeded,
+        "CE": CompileError,
+        "CLE": CompileLimitExceeded,
+        "IE": InternalError,
+        "SJE": SpecialJudgeError,
+    }
 
 SignalErrorMessage = {
     4: 'illegal hardware instruction',
@@ -75,10 +104,14 @@ class StdChal:
         elif self.comp_typ == 'java':
             t, class_name = self.comp_java()
             res, verdict = t
+        else:
+            utils.logger.warning(f"StdChal {self.chal_id} uses an unsupported language.")
+            return
 
         checker_fileid = None
         fileid = verdict
-        if self.judge_typ == 'ioredir':
+
+        if self.judge_typ in ['ioredir', 'cms']:
             checker_res, checker_fileid = self.comp_checker()
             if checker_res != GoJudgeStatus.Accepted:
                 for res in self.results:
@@ -133,14 +166,20 @@ class StdChal:
         return self.results
 
     def judge_diff_group(self, group_index, test_groups, fileid, checker_fileid, run_args):
-        if self.judge_typ != 'ioredir' and checker_fileid is None:
+        if self.judge_typ == 'ioredir' and checker_fileid is not None:
             for tests in test_groups:
-                self.judge_diff(run_args, group_index, fileid, tests['in'], tests['ans'], tests['timelimit'], tests['memlimit'])
+                self.judge_diff_ioredir(run_args, group_index, fileid, checker_fileid, tests['in'], tests['ans'], tests['timelimit'], tests['memlimit'])
+                if self.results[group_index]['status'] != Status.Accepted:
+                    break
+
+        elif self.judge_typ == 'cms' and checker_fileid is not None:
+            for tests in test_groups:
+                self.judge_diff_cms(run_args, group_index, fileid, checker_fileid, tests['in'], tests['ans'], tests['timelimit'], tests['memlimit'])
                 if self.results[group_index]['status'] != Status.Accepted:
                     break
         else:
             for tests in test_groups:
-                self.judge_diff_checker(run_args, group_index, fileid, checker_fileid, tests['in'], tests['ans'], tests['timelimit'], tests['memlimit'])
+                self.judge_diff(run_args, group_index, fileid, tests['in'], tests['ans'], tests['timelimit'], tests['memlimit'])
                 if self.results[group_index]['status'] != Status.Accepted:
                     break
 
@@ -289,7 +328,119 @@ class StdChal:
             else:
                 result['status'] = Status.InternalError
 
-    def judge_diff_checker(self, args, test_groups, fileid, checker_fileid, in_path, ans_path, timelimit, memlimit):
+    def judge_diff_cms(self, args, test_groups, fileid, checker_fileid, in_path, ans_path, timelimit, memlimit):
+        result = self.results[test_groups]
+        if result["status"] in [Status.TimeLimitExceeded, Status.MemoryLimitExceeded, Status.RuntimeError, Status.RuntimeErrorSignalled, Status.InternalError]:
+            return
+
+        res = executor_server.exec({
+            "cmd": [{
+                "args": [*args],
+                "env": ["PATH=/usr/bin:/bin"],
+                "files": [{
+                    "src": in_path
+                }, {
+                    "name": "stdout",
+                    "max": 268435456
+                }, {
+                    "name": "stderr",
+                    "max": 10240,
+                }],
+                "cpuLimit": timelimit,
+                "memoryLimit": memlimit,
+                "stackLimit": 65536 * 1024,
+                "procLimit": 1,
+                "cpuRateLimit": 1000,
+                "strictMemoryLimit": False, # 開了會直接Signalled，會讓使用者沒辦法判斷
+                "copyIn": {
+                    "a": {
+                        "fileId": fileid
+                    }
+                },
+                "copyOutCached": ["stdout"]
+            }]
+        })
+        res = res["results"][0]
+        stdout_fileid = res["fileIds"]["stdout"]
+
+        checker_res = executor_server.exec({
+            "cmd": [{
+                "args": ["check", "test_in", "test_out", "user_ans"],
+                "env": ["PATH=/usr/bin:/bin"],
+                "files": [{
+                    "content": ""
+                }, {
+                    "name": "stdout",
+                    "max": 10240
+                }, {
+                    "name": "stderr",
+                    "max": 10240,
+                }],
+                "cpuLimit": timelimit * 2,
+                "memoryLimit": memlimit,
+                "stackLimit": 65536 * 1024,
+                "procLimit": 10,
+                "cpuRateLimit": 1000,
+                "strictMemoryLimit": False, # 開了會直接Signalled，會讓使用者沒辦法判斷
+                "copyIn": {
+                    "check": {
+                        "fileId": checker_fileid
+                    },
+                    "test_in": {
+                        "src": in_path
+                    },
+                    "test_ans": {
+                        "src": ans_path
+                    },
+                    "user_ans": {
+                        "fileId": stdout_fileid
+                    }
+                },
+                "copyOut": ["stdout", "stderr"]
+            }]
+        })
+        checker_res = checker_res["results"][0]
+
+        result['time'] = max(res['runTime'], result['time'])
+        result['memory'] = max(res['memory'], result['memory'])
+
+        if res['status'] == GoJudgeStatus.Accepted:
+            if checker_res['status'] == GoJudgeStatus.Accepted:
+                result['status'] = Status.Accepted
+
+            elif checker_res['status'] == GoJudgeStatus.NonzeroExitStatus:
+                result['status'] = Status.WrongAnswer
+                result['verdict'] = checker_res['files']['stderr']
+
+            else:
+                result['status'] = Status.SpecialJudgeError
+
+
+        else:
+            if res['status'] == GoJudgeStatus.TimeLimitExceeded:
+                result['status'] = Status.TimeLimitExceeded
+
+            elif res['status'] == GoJudgeStatus.MemoryLimitExceeded:
+                result['status'] = Status.MemoryLimitExceeded
+
+            elif res['status'] == GoJudgeStatus.OutputLimitExceeded:
+                result['status'] = Status.OutputLimitExceeded
+
+            elif res['status'] == GoJudgeStatus.NonzeroExitStatus:
+                result['verdict'] = res['files']['stderr']
+                result['status'] = Status.RuntimeError
+
+            elif res['status'] == GoJudgeStatus.Signalled:
+                result['status'] = Status.RuntimeErrorSignalled
+
+            else:
+                result['status'] = Status.InternalError
+
+        if executor_server.file_delete(stdout_fileid) == 0:
+            utils.logger.warning(f"StdChal {self.chal_id} delete cached stdout file {stdout_fileid} failed.")
+
+
+    def judge_diff_ioredir(self, args, test_groups, fileid, checker_fileid, in_path, ans_path, timelimit, memlimit):
         result = self.results[test_groups]
         if result["status"] in [Status.TimeLimitExceeded, Status.MemoryLimitExceeded, Status.RuntimeError, Status.RuntimeErrorSignalled, Status.InternalError]:
             return
@@ -391,7 +542,7 @@ class StdChal:
 
         # SIGPIPE -> checker failed
         if res['status'] == GoJudgeStatus.Signalled and res['exitStatus'] == 13: # SIGPIPE
-            result['status'] = Status.InternalError
+            result['status'] = Status.SpecialJudgeError
             return
 
         if res['status'] == GoJudgeStatus.Accepted:
@@ -400,7 +551,7 @@ class StdChal:
             elif checker_res['status'] == GoJudgeStatus.NonzeroExitStatus:
                 result['status'] = Status.WrongAnswer
             else:
-                result['status'] = Status.InternalError
+                result['status'] = Status.SpecialJudgeError
                 # checker failed
 
         else:
