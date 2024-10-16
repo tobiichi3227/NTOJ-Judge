@@ -177,7 +177,6 @@ class StdChal:
 
         elif self.judge_typ == 'cms' and checker_fileid is not None:
             for tests in test_groups:
-
                 self.judge_diff_cms(run_args, group_index, fileid, checker_fileid, tests['in'], tests['ans'], tests['timelimit'], tests['memlimit'])
                 if self.results[group_index]['status'] != Status.Accepted:
                     break
@@ -409,12 +408,12 @@ class StdChal:
         result['memory'] = max(res['memory'], result['memory'])
 
         if res['status'] == GoJudgeStatus.Accepted:
+            result['verdict'] = checker_res['files']['stderr']
             if checker_res['status'] == GoJudgeStatus.Accepted:
                 result['status'] = Status.Accepted
 
             elif checker_res['status'] == GoJudgeStatus.NonzeroExitStatus:
                 result['status'] = Status.WrongAnswer
-                result['verdict'] = checker_res['files']['stderr']
 
             else:
                 result['status'] = Status.SpecialJudgeError

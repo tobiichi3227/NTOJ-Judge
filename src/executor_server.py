@@ -82,9 +82,6 @@ def file_delete(fileid: str):
 
     return FFILIB.FileDelete(fileid.encode('utf-8'))
 
-def file_list():
-    pass
-
 def diff_strictly(ans: str, out: str):
     assert FFILIB is not None
 
@@ -96,7 +93,3 @@ def diff_ignore_space(ans: str, out: str):
 
     res = FFILIB.DiffIgnoreTrailiingSpace(ans.encode('utf-8'), out.encode('utf-8'))
     return res == 0
-
-def free(ptr):
-    assert FFILIB is not None
-
