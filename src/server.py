@@ -32,7 +32,7 @@ class ChalPriority:
 class JudgeDispatcher:
     judge_usage = 0
     chal_running_count = 0
-    chal_queues = [Queue() for i in range(4)]
+    chal_queues = [Queue() for _ in range(4)]
     chal_set = set()
     event = threading.Event()
 
@@ -52,8 +52,11 @@ class JudgeDispatcher:
 
         memlimit, timelimit = 0, 0
         for test in test_list:
-            memlimit = test['memlimit']
-            timelimit = test['timelimit']
+            try:
+                memlimit = int(test['memlimit'])
+                timelimit = int(test['timelimit'])
+            except ValueError:
+                pass
 
             data_ids = test['metadata']['data']
             t = []
