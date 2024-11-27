@@ -392,7 +392,7 @@ class StdChal:
                     "test_in": {
                         "src": in_path
                     },
-                    "test_ans": {
+                    "test_out": {
                         "src": ans_path
                     },
                     "user_ans": {
