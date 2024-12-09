@@ -140,16 +140,20 @@ class StdChal:
         else:
             args = ["a"]
 
+        tasks = []
         if self.comp_typ != 'java':
             for i, test_groups in enumerate(self.test_list):
                 t = threading.Thread(target=self.judge_diff_group, args=(i, test_groups, fileid, checker_fileid, args))
                 t.start()
-                t.join()
+                tasks.append(t)
         else:
             for i, test_groups in enumerate(self.test_list):
                 t = threading.Thread(target=self.judge_diff_group_for_java, args=(i, class_name, test_groups, fileid, args))
                 t.start()
-                t.join()
+                tasks.append(t)
+
+        for task in tasks:
+            task.join()
 
         if checker_fileid and executor_server.file_delete(checker_fileid) == 0:
             utils.logger.warning(f"StdChal {self.chal_id} delete cached checker file {fileid} failed.")
